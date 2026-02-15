@@ -17,12 +17,15 @@ const io = new Server(server, {
 app.use(cors());
 app.use(express.json());
 
-// MongoDB Connection Placeholder
-// mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/poll-rooms', {
-//   useNewUrlParser: true,
-//   useUnifiedTopology: true
-// }).then(() => console.log('MongoDB Connected'))
-//   .catch(err => console.log(err));
+// MongoDB Connection
+mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/poll-rooms', {
+  useNewUrlParser: true,
+  useUnifiedTopology: true
+}).then(() => console.log('MongoDB Connected'))
+  .catch(err => console.log(err));
+
+const pollRoutes = require('./routes/pollRoutes');
+app.use('/api/polls', pollRoutes);
 
 io.on('connection', (socket) => {
   console.log('A user connected:', socket.id);
