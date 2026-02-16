@@ -31,6 +31,10 @@ app.use('/api/polls', pollRoutes);
 
 const Poll = require('./models/Poll');
 
+// IP-based rate limiting map: { "pollId:ip": timestamp }
+const voteRateLimit = new Map();
+const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute
+
 io.on('connection', (socket) => {
   console.log('A user connected:', socket.id);
 
@@ -41,6 +45,23 @@ io.on('connection', (socket) => {
 
   socket.on('vote', async ({ pollId, optionId }) => {
     try {
+      // Get IP address
+      const ip = socket.handshake.headers['x-forwarded-for']?.split(',')[0] ||
+        socket.handshake.address;
+      const rateLimitKey = `${pollId}:${ip}`;
+
+      // Check rate limit
+      const lastVoteTime = voteRateLimit.get(rateLimitKey);
+      const now = Date.now();
+
+      if (lastVoteTime && (now - lastVoteTime) < RATE_LIMIT_WINDOW) {
+        const remainingTime = Math.ceil((RATE_LIMIT_WINDOW - (now - lastVoteTime)) / 1000);
+        socket.emit('error', {
+          message: `Please wait ${remainingTime} seconds before voting again on this poll.`
+        });
+        return;
+      }
+
       // Use atomic update to increment vote count
       const updatedPoll = await Poll.findOneAndUpdate(
         { id: pollId, 'options._id': optionId },
@@ -52,6 +73,9 @@ io.on('connection', (socket) => {
         socket.emit('error', { message: 'Poll or option not found' });
         return;
       }
+
+      // Update rate limit timestamp
+      voteRateLimit.set(rateLimitKey, now);
 
       // Emit the full updated poll to everyone in the room
       io.to(pollId).emit('pollUpdated', updatedPoll);
@@ -65,6 +89,16 @@ io.on('connection', (socket) => {
     console.log('User disconnected:', socket.id);
   });
 });
+
+// Cleanup old rate limit entries every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, timestamp] of voteRateLimit.entries()) {
+    if (now - timestamp > RATE_LIMIT_WINDOW) {
+      voteRateLimit.delete(key);
+    }
+  }
+}, 5 * 60 * 1000);
 
 const PORT = process.env.PORT || 5000;
 
