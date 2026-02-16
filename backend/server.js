@@ -43,45 +43,148 @@ io.on('connection', (socket) => {
     console.log(`User ${socket.id} joined poll: ${pollId}`);
   });
 
-  socket.on('vote', async ({ pollId, optionId }) => {
+  socket.on('vote', async ({ pollId, optionId, username }) => {
     try {
-      // Get IP address
+      // Validate username
+      if (!username || typeof username !== 'string') {
+        socket.emit('error', { message: 'Username is required' });
+        return;
+      }
+
+      const trimmedUsername = username.trim();
+      // Normalize username to lower-case to avoid case-sensitive duplicates
+      const normalizedUsername = trimmedUsername.toLowerCase();
+
+      // Validate username format (alphanumeric only, max 20 chars)
+      if (trimmedUsername.length === 0 || trimmedUsername.length > 20) {
+        socket.emit('error', { message: 'Username must be between 1 and 20 characters' });
+        return;
+      }
+
+      if (!/^[a-zA-Z0-9]+$/.test(trimmedUsername)) {
+        socket.emit('error', { message: 'Username can only contain letters and numbers' });
+        return;
+      }
+
+      // Get IP address for rate limiting
       const ip = socket.handshake.headers['x-forwarded-for']?.split(',')[0] ||
         socket.handshake.address;
-      const rateLimitKey = `${pollId}:${ip}`;
+      const rateLimitKeyIp = `${pollId}:ip:${ip}`;
+      const rateLimitKeyUser = `${pollId}:user:${normalizedUsername}`;
 
-      // Check rate limit
-      const lastVoteTime = voteRateLimit.get(rateLimitKey);
+      // Check rate limit (both by IP and by normalized username)
+      const lastVoteTimeIp = voteRateLimit.get(rateLimitKeyIp);
+      const lastVoteTimeUser = voteRateLimit.get(rateLimitKeyUser);
       const now = Date.now();
 
-      if (lastVoteTime && (now - lastVoteTime) < RATE_LIMIT_WINDOW) {
-        const remainingTime = Math.ceil((RATE_LIMIT_WINDOW - (now - lastVoteTime)) / 1000);
+      if ((lastVoteTimeIp && (now - lastVoteTimeIp) < RATE_LIMIT_WINDOW) ||
+          (lastVoteTimeUser && (now - lastVoteTimeUser) < RATE_LIMIT_WINDOW)) {
+        const remainingIp = lastVoteTimeIp ? Math.ceil((RATE_LIMIT_WINDOW - (now - lastVoteTimeIp)) / 1000) : 0;
+        const remainingUser = lastVoteTimeUser ? Math.ceil((RATE_LIMIT_WINDOW - (now - lastVoteTimeUser)) / 1000) : 0;
+        const remainingTime = Math.max(remainingIp, remainingUser);
         socket.emit('error', {
           message: `Please wait ${remainingTime} seconds before voting again on this poll.`
         });
         return;
       }
 
-      // Use atomic update to increment vote count
-      const updatedPoll = await Poll.findOneAndUpdate(
-        { id: pollId, 'options._id': optionId },
-        { $inc: { 'options.$.voteCount': 1 } },
-        { new: true }
-      );
-
-      if (!updatedPoll) {
-        socket.emit('error', { message: 'Poll or option not found' });
+      // Short-circuit: if the user already has a vote on this exact option, do nothing
+      const alreadyVoted = await Poll.findOne({ id: pollId, "options._id": optionId, "options.votes.username": normalizedUsername });
+      if (alreadyVoted) {
+        const freshPoll = await Poll.findOne({ id: pollId });
+        if (freshPoll) {
+          freshPoll.options.forEach(option => {
+            option.voteCount = option.votes ? option.votes.length : 0;
+          });
+          await freshPoll.save();
+          io.to(pollId).emit('pollUpdated', freshPoll);
+        }
         return;
       }
 
-      // Update rate limit timestamp
-      voteRateLimit.set(rateLimitKey, now);
+      // 1. Atomic Pull: Remove user from ALL options in this poll
+      await Poll.updateOne(
+        { id: pollId },
+        {
+          $pull: {
+            "options.$[].votes": { username: normalizedUsername }
+          }
+        }
+      );
+
+      // 2. Atomic Push: Add user to the specific option
+      const updateResult = await Poll.updateOne(
+        { id: pollId, "options._id": optionId },
+        {
+          $push: {
+            "options.$.votes": {
+              username: normalizedUsername,
+              votedAt: new Date()
+            }
+          }
+        }
+      );
+
+      if (updateResult.modifiedCount === 0) {
+        socket.emit('error', { message: 'Failed to record vote. Poll or option not found.' });
+        return;
+      }
+
+      // 3. Update voters list (for unique voter tracking)
+      // Check if voter exists
+      const pollCheck = await Poll.findOne({ id: pollId, "voters.username": normalizedUsername });
+
+      if (pollCheck) {
+        // Update existing voter
+        await Poll.updateOne(
+          { id: pollId, "voters.username": normalizedUsername },
+          {
+            $set: {
+              "voters.$.currentVote": optionId,
+              "voters.$.votedAt": new Date()
+            }
+          }
+        );
+      } else {
+        // Add new voter
+        await Poll.updateOne(
+          { id: pollId },
+          {
+            $push: {
+              voters: {
+                username: normalizedUsername,
+                currentVote: optionId,
+                votedAt: new Date()
+              }
+            }
+          }
+        );
+      }
+
+      // 4. Fetch the fresh poll to calculate counts and broadcast
+      const freshPoll = await Poll.findOne({ id: pollId });
+
+      if (!freshPoll) {
+        socket.emit('error', { message: 'Poll not found after voting' });
+        return;
+      }
+
+      // Recalculate vote counts strictly from the arrays
+      freshPoll.options.forEach(option => {
+        option.voteCount = option.votes ? option.votes.length : 0;
+      });
+
+      await freshPoll.save(); // Save the recalculated counts
+
+      // Update rate limit timestamps for both IP and username
+      voteRateLimit.set(rateLimitKeyIp, now);
+      voteRateLimit.set(rateLimitKeyUser, now);
 
       // Emit the full updated poll to everyone in the room
-      io.to(pollId).emit('pollUpdated', updatedPoll);
+      io.to(pollId).emit('pollUpdated', freshPoll);
     } catch (err) {
       console.error('Error voting:', err);
-      socket.emit('error', { message: 'Error recording vote' });
+      socket.emit('error', { message: 'Error recording vote: ' + err.message });
     }
   });
 
