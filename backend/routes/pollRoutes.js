@@ -21,7 +21,7 @@ router.post('/', async (req, res) => {
         await newPoll.save();
         res.status(201).json({ id: newPoll.id });
     } catch (err) {
-        console.error(err);
+        console.error('Error creating poll:', err);
         res.status(500).json({ error: 'Server error creating poll.' });
     }
 });
