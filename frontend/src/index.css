@@ -1,1 +1,21 @@
 @import "tailwindcss";
+
+/* App background image: place your background image at `public/background.png`
+	 The image attachment can be saved there so the app serves it at `/background.png` */
+:root {
+	--bg-overlay: rgba(255,255,255,0.6);
+}
+
+html, body, #root {
+	height: 100%;
+}
+
+body {
+	background-image: url('/background.jpg');
+	background-size: cover;
+	background-position: center center;
+	background-repeat: no-repeat;
+	background-attachment: fixed;
+	/* optional overlay for readability */
+	background-color: var(--bg-overlay);
+}

@@ -18,6 +18,30 @@ const pollSchema = new mongoose.Schema({
         voteCount: {
             type: Number,
             default: 0
+        },
+        votes: [{
+            username: {
+                type: String,
+                required: true
+            },
+            votedAt: {
+                type: Date,
+                default: Date.now
+            }
+        }]
+    }],
+    voters: [{
+        username: {
+            type: String,
+            required: true
+        },
+        currentVote: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'Poll.options'
+        },
+        votedAt: {
+            type: Date,
+            default: Date.now
         }
     }],
     createdAt: {
