@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import axios from 'axios'
 
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000'
+
 export default function CreatePoll() {
     const navigate = useNavigate()
     const [question, setQuestion] = useState('')
@@ -40,7 +42,7 @@ export default function CreatePoll() {
 
         setLoading(true)
         try {
-            const res = await axios.post('/api/polls', {
+            const res = await axios.post(`${API_URL}/api/polls`, {
                 question: question.trim(),
                 options: filledOptions,
             })

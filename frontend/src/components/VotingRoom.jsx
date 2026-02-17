@@ -3,6 +3,9 @@ import { useParams } from 'react-router-dom'
 import axios from 'axios'
 import io from 'socket.io-client'
 
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000'
+const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:3000'
+
 export default function VotingRoom() {
     const { id } = useParams()
     const [poll, setPoll] = useState(null)
@@ -30,7 +33,7 @@ export default function VotingRoom() {
     useEffect(() => {
         const fetchPoll = async () => {
             try {
-                const res = await axios.get(`/api/polls/${id}`)
+                const res = await axios.get(`${API_URL}/api/polls/${id}`)
                 setPoll(res.data)
                 setLoading(false)
             } catch (err) {
@@ -47,7 +50,7 @@ export default function VotingRoom() {
 
     // Setup Socket.io connection
     useEffect(() => {
-        const newSocket = io()
+        const newSocket = io(SOCKET_URL)
         setSocket(newSocket)
 
         newSocket.emit('joinPoll', id)
